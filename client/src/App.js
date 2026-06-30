@@ -42,6 +42,7 @@ function App() {
   const [authError, setAuthError] = useState("");
   const [artworkError, setArtworkError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
+  const [subscribeMessages, setSubscribeMessages] = useState({});
   const [bidAmounts, setBidAmounts] = useState({});
   const [bidMessage, setBidMessage] = useState("");
   const [walletTopUpAmount, setWalletTopUpAmount] = useState("");
@@ -298,12 +299,12 @@ function App() {
   const subscribeToArtwork = async (id) => {
     try {
       await api.post(`/artworks/${id}/subscribe`);
-      setActionMessage("Subscription done.");
+      setSubscribeMessages((prev) => ({ ...prev, [id]: "Subscription done." }));
       fetchArtworks();
     } catch (error) {
       const message = error.response?.data?.error || error.message || "Failed to subscribe to artwork.";
       console.error("Failed to subscribe to artwork", error);
-      setActionMessage(message);
+      setSubscribeMessages((prev) => ({ ...prev, [id]: message }));
     }
   };
   const filteredArtworks = artworks.filter((art) => {
@@ -598,6 +599,9 @@ function App() {
                       <button type="button" className="secondary-button" onClick={() => subscribeToArtwork(art._id)}>
                         Subscribe
                       </button>
+                    )}
+                    {subscribeMessages[art._id] && (
+                      <p className="action-text">{subscribeMessages[art._id]}</p>
                     )}
                   </div>
                   {getArtworkStatus(art) === "active" && art.ownerId !== user?._id && (
