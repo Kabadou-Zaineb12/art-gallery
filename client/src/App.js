@@ -44,6 +44,7 @@ function App() {
   const [actionMessage, setActionMessage] = useState("");
   const [bidAmounts, setBidAmounts] = useState({});
   const [bidMessage, setBidMessage] = useState("");
+  const [walletTopUpAmount, setWalletTopUpAmount] = useState("");
   const socketRef = useRef(null);
 
   const updateArtworkFromSocket = (updatedArtwork) => {
@@ -197,6 +198,27 @@ function App() {
     setActiveTab("browse");
   };
 
+  const topUpWallet = async () => {
+    const amount = Number(walletTopUpAmount);
+    if (!amount || amount <= 0) {
+      setActionMessage("Enter a positive coin amount to add to your wallet.");
+      return;
+    }
+
+    try {
+      const res = await api.post("/wallet/topup", { amount });
+      const updatedUser = res.data.user || { ...user, coins: res.data.coins };
+      setUser(updatedUser);
+      localStorage.setItem("user", JSON.stringify(updatedUser));
+      setWalletTopUpAmount("");
+      setActionMessage(`Wallet topped up by ${amount} coins.`);
+    } catch (error) {
+      const message = error.response?.data?.error || error.message || "Failed to add coins.";
+      console.error("Wallet top-up failed", error);
+      setActionMessage(message);
+    }
+  };
+
   const addArtwork = async (e) => {
     e.preventDefault();
 
@@ -276,9 +298,12 @@ function App() {
   const subscribeToArtwork = async (id) => {
     try {
       await api.post(`/artworks/${id}/subscribe`);
+      setActionMessage("Subscription done.");
       fetchArtworks();
     } catch (error) {
+      const message = error.response?.data?.error || error.message || "Failed to subscribe to artwork.";
       console.error("Failed to subscribe to artwork", error);
+      setActionMessage(message);
     }
   };
   const filteredArtworks = artworks.filter((art) => {
@@ -416,6 +441,23 @@ function App() {
           <p><strong>Username:</strong> {user?.username}</p>
           <p><strong>Email:</strong> {user?.email}</p>
           <p><strong>Wallet:</strong> {user?.coins} coins</p>
+          <div className="wallet-topup">
+            <label className="label-text" htmlFor="walletTopUpAmount">
+              Add coins to wallet
+            </label>
+            <input
+              id="walletTopUpAmount"
+              className="text-input"
+              type="number"
+              min="1"
+              value={walletTopUpAmount}
+              placeholder="Amount"
+              onChange={(e) => setWalletTopUpAmount(e.target.value)}
+            />
+            <button className="primary-button" type="button" onClick={topUpWallet}>
+              Top Up Wallet
+            </button>
+          </div>
         </section>
       )}
       {bidMessage && (
