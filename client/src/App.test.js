@@ -1,8 +1,11 @@
-import { render, screen } from '@testing-library/react';
-import App from './App';
+import { render, screen } from "@testing-library/react";
+import App from "./App";
 
-test('renders learn react link', () => {
+test("renders auth form", () => {
   render(<App />);
-  const linkElement = screen.getByText(/learn react/i);
-  expect(linkElement).toBeInTheDocument();
+
+  expect(screen.getByRole("heading", { name: /login/i })).toBeInTheDocument();
+  expect(screen.getByPlaceholderText(/username/i)).toBeInTheDocument();
+  expect(screen.getByPlaceholderText(/password/i)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /create account/i })).toBeInTheDocument();
 });

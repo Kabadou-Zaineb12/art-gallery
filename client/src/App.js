@@ -1,5 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { io } from "socket.io-client";
 import api from "./api";
+import "./App.css";
+
 const getImageUrl = (imagePath) => {
   if (!imagePath) {
     return "";
@@ -15,28 +18,79 @@ function App() {
   const [artworks, setArtworks] = useState([]);
   const [title, setTitle] = useState("");
   const [imageFile, setImageFile] = useState(null);
+  const [biddingStart, setBiddingStart] = useState("");
+  const [biddingEnd, setBiddingEnd] = useState("");
   const [tagFilter, setTagFilter] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
   const [search, setSearch] = useState("");
   const [sortOption, setSortOption] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [email, setEmail] = useState("");
+  const [startingPrice, setStartingPrice] = useState("");
   const [user, setUser] = useState(() => {
     const savedUser = localStorage.getItem("user");
     return savedUser ? JSON.parse(savedUser) : null;
   });
   const [isLoggedIn, setIsLoggedIn] = useState(
-    () => Boolean(localStorage.getItem("token"))
+    () => Boolean(localStorage.getItem("token")) && Boolean(localStorage.getItem("user"))
   );
   const [authMode, setAuthMode] = useState("login");
   const [activeTab, setActiveTab] = useState("browse");
+  const [showProfile, setShowProfile] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [bidAmounts, setBidAmounts] = useState({});
+  const [bidMessage, setBidMessage] = useState("");
+  const socketRef = useRef(null);
 
   useEffect(() => {
-    if (localStorage.getItem("token")) {
+    if (localStorage.getItem("token") && localStorage.getItem("user")) {
       fetchArtworks();
+    } else {
+      setIsLoggedIn(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!isLoggedIn) {
+      socketRef.current?.disconnect();
+      socketRef.current = null;
+      return;
+    }
+
+    const socket = io("http://localhost:5000", {
+      auth: {
+        token: localStorage.getItem("token"),
+      },
+    });
+
+    socket.on("connect_error", (err) => {
+      console.error("Socket connect error", err.message);
+    });
+
+    socket.on("bidPlaced", (updatedArtwork) => {
+      setArtworks((prev) => prev.map((art) => (art._id === updatedArtwork._id ? updatedArtwork : art)));
+      setBidMessage("Bid placed successfully.");
+    });
+
+    socket.on("auctionStarted", (updatedArtwork) => {
+      setArtworks((prev) => prev.map((art) => (art._id === updatedArtwork._id ? updatedArtwork : art)));
+    });
+
+    socket.on("auctionEnded", (updatedArtwork) => {
+      setArtworks((prev) => prev.map((art) => (art._id === updatedArtwork._id ? updatedArtwork : art)));
+    });
+
+    socket.on("bidError", ({ message }) => {
+      setBidMessage(message);
+    });
+
+    socketRef.current = socket;
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [isLoggedIn]);
 
   const fetchArtworks = async () => {
     try {
@@ -70,13 +124,14 @@ function App() {
   const registerUser = async (e) => {
     e.preventDefault();
     try {
-      const res = await api.post("/register", { username, password });
+      const res = await api.post("/register", { username, password, email });
       localStorage.setItem("token", res.data.token);
       localStorage.setItem("user", JSON.stringify(res.data.user));
       setUser(res.data.user);
       setIsLoggedIn(true);
       setUsername("");
       setPassword("");
+      setEmail("");
       setAuthError("");
       fetchArtworks();
     } catch (error) {
@@ -102,22 +157,42 @@ function App() {
     try {
       const formData = new FormData();
       formData.append("title", title);
+      formData.append("startingPrice", Number(startingPrice) || 0);
+      if (biddingStart) {
+        formData.append("biddingStart", biddingStart);
+      }
+      if (biddingEnd) {
+        formData.append("biddingEnd", biddingEnd);
+      }
       if (imageFile) {
         formData.append("image", imageFile);
       }
 
-      await api.post("/artworks", formData, {
-        headers: {
-          Authorization: localStorage.getItem("token"),
-        },
-      });
+      await api.post("/artworks", formData);
 
       setTitle("");
       setImageFile(null);
+      setStartingPrice("");
+      setBiddingStart("");
+      setBiddingEnd("");
       fetchArtworks();
     } catch (error) {
       console.error("Failed to add artwork", error);
     }
+  };
+
+  const placeBid = (artworkId) => {
+    const amount = Number(bidAmounts[artworkId]);
+    if (!amount || amount <= 0) {
+      setBidMessage("Enter a valid bid amount.");
+      return;
+    }
+    socketRef.current?.emit("placeBid", { artworkId, amount });
+  };
+
+  const handleBidInputChange = (artworkId, value) => {
+    setBidAmounts((prev) => ({ ...prev, [artworkId]: value }));
+    setBidMessage("");
   };
 
   const deleteArtwork = async (id) => {
@@ -128,12 +203,21 @@ function App() {
       console.error("Failed to delete artwork", error);
     }
   };
+
+  const subscribeToArtwork = async (id) => {
+    try {
+      await api.post(`/artworks/${id}/subscribe`);
+      fetchArtworks();
+    } catch (error) {
+      console.error("Failed to subscribe to artwork", error);
+    }
+  };
   const filteredArtworks = artworks.filter((art) => {
     const matchesTag =
       tagFilter === "" || art.tags?.includes(tagFilter);
 
     const matchesPrice =
-      maxPrice === "" || art.price <= Number(maxPrice);
+      maxPrice === "" || art.startingPrice <= Number(maxPrice);
 
     const matchesSearch =
       search === "" ||
@@ -150,10 +234,10 @@ function App() {
       return b.title.localeCompare(a.title);
     }
     if (sortOption === "price-asc") {
-      return (a.price || 0) - (b.price || 0);
+      return (a.startingPrice || 0) - (b.startingPrice || 0);
     }
     if (sortOption === "price-desc") {
-      return (b.price || 0) - (a.price || 0);
+      return (b.startingPrice || 0) - (a.startingPrice || 0);
     }
     return 0;
   });
@@ -161,115 +245,167 @@ function App() {
 
   if (!isLoggedIn) {
     return (
-      <div style={{ padding: "20px", maxWidth: "480px", margin: "0 auto" }}>
-        <h1>{authMode === "login" ? "Login" : "Create Account"}</h1>
+      <div className="auth-page">
+        <div className="auth-card">
+          <h1>{authMode === "login" ? "Login" : "Create Account"}</h1>
 
-        <div style={{ marginBottom: "16px" }}>
-          <button
-            type="button"
-            onClick={() => {
-              setAuthMode("login");
-              setAuthError("");
-            }}
-            style={{ marginRight: "8px" }}
-          >
-            Login
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setAuthMode("register");
-              setAuthError("");
-            }}
-          >
-            Create Account
-          </button>
-        </div>
+          <div className="auth-toggle">
+            <button
+              type="button"
+              className={authMode === "login" ? "active" : ""}
+              onClick={() => {
+                setAuthMode("login");
+                setEmail("");
+                setAuthError("");
+              }}
+            >
+              Login
+            </button>
+            <button
+              type="button"
+              className={authMode === "register" ? "active" : ""}
+              onClick={() => {
+                setAuthMode("register");
+                setEmail("");
+                setAuthError("");
+              }}
+            >
+              Create Account
+            </button>
+          </div>
 
-        <form onSubmit={authMode === "login" ? loginUser : registerUser}>
-          <div style={{ marginBottom: "12px" }}>
+          <form className="auth-form" onSubmit={authMode === "login" ? loginUser : registerUser}>
             <input
-              style={{ width: "100%" }}
+              className="auth-input"
               value={username}
               placeholder="Username"
               onChange={(e) => setUsername(e.target.value)}
             />
-          </div>
-          <div style={{ marginBottom: "12px" }}>
+            {authMode === "register" && (
+              <input
+                className="auth-input"
+                type="email"
+                value={email}
+                placeholder="Email"
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            )}
             <input
-              style={{ width: "100%" }}
+              className="auth-input"
               type="password"
               value={password}
               placeholder="Password"
               onChange={(e) => setPassword(e.target.value)}
             />
-          </div>
-          <button type="submit">
-            {authMode === "login" ? "Login" : "Create Account"}
-          </button>
-        </form>
+            <button className="primary-button" type="submit">
+              {authMode === "login" ? "Login" : "Create Account"}
+            </button>
+          </form>
 
-        {authError && <p style={{ color: "red" }}>{authError}</p>}
+          {authError && <p className="auth-error">{authError}</p>}
+        </div>
       </div>
     );
   }
 
   return (
-    <div style={{ padding: "20px", maxWidth: "960px", margin: "0 auto" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="app-container">
+      <header className="app-header">
         <div>
           <h1>Art Gallery</h1>
-          <p>Logged in as: {user?.username}</p>
+          <p className="user-label">Logged in as {user?.username}</p>
+          <p className="user-label">Wallet: {user?.coins} coins</p>
         </div>
-        <button onClick={logout}>Logout</button>
+        <div className="header-actions">
+          <button className="secondary-button" onClick={() => setShowProfile((prev) => !prev)}>
+            {showProfile ? "Hide Profile" : "Profile"}
+          </button>
+          <button className="secondary-button" onClick={logout}>
+            Logout
+          </button>
+        </div>
       </header>
 
-      <nav style={{ margin: "20px 0" }}>
+      <nav className="tabs" aria-label="Gallery navigation">
         <button
+          className={activeTab === "browse" ? "tab-button active" : "tab-button"}
           onClick={() => setActiveTab("browse")}
-          style={{ marginRight: "8px" }}
         >
           Browse
         </button>
-        <button onClick={() => setActiveTab("add")}>Add Artwork</button>
+        <button
+          className={activeTab === "add" ? "tab-button active" : "tab-button"}
+          onClick={() => setActiveTab("add")}
+        >
+          Add Artwork
+        </button>
       </nav>
 
+      {showProfile && (
+        <section className="panel profile-panel">
+          <h2>Your Profile</h2>
+          <p><strong>Username:</strong> {user?.username}</p>
+          <p><strong>Email:</strong> {user?.email}</p>
+          <p><strong>Wallet:</strong> {user?.coins} coins</p>
+        </section>
+      )}
       {activeTab === "add" ? (
-        <section>
+        <section className="panel">
           <h2>Add Artwork</h2>
-          <form onSubmit={addArtwork} style={{ marginBottom: "24px" }}>
-            <div style={{ marginBottom: "12px" }}>
-              <input
-                style={{ width: "100%" }}
-                value={title}
-                placeholder="Title"
-                onChange={(e) => setTitle(e.target.value)}
-              />
-            </div>
-            <div style={{ marginBottom: "12px" }}>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => setImageFile(e.target.files?.[0] || null)}
-              />
-            </div>
-            <button type="submit">Add</button>
+          <form className="artwork-form" onSubmit={addArtwork}>
+            <input
+              className="text-input"
+              value={title}
+              placeholder="Artwork title"
+              onChange={(e) => setTitle(e.target.value)}
+            />
+            <input
+              className="file-input"
+              type="file"
+              accept="image/*"
+              onChange={(e) => setImageFile(e.target.files?.[0] || null)}
+            />
+            <input
+              className="text-input"
+              type="number"
+              min="0"
+              value={startingPrice}
+              placeholder="Starting price"
+              onChange={(e) => setStartingPrice(e.target.value)}
+            />
+            <label className="label-text">Bidding start</label>
+            <input
+              className="text-input"
+              type="datetime-local"
+              value={biddingStart}
+              onChange={(e) => setBiddingStart(e.target.value)}
+            />
+            <label className="label-text">Bidding end</label>
+            <input
+              className="text-input"
+              type="datetime-local"
+              value={biddingEnd}
+              onChange={(e) => setBiddingEnd(e.target.value)}
+            />
+            <button className="primary-button" type="submit">
+              Add Artwork
+            </button>
           </form>
         </section>
       ) : (
-        <section>
+        <section className="panel">
           <h2>Browse Artworks</h2>
-          <div style={{ marginBottom: "20px" }}>
+          <div className="filters">
             <input
+              className="text-input"
               value={search}
               placeholder="Search title..."
               onChange={(e) => setSearch(e.target.value)}
-              style={{ marginRight: "8px" }}
             />
             <select
+              className="select-input"
               value={tagFilter}
               onChange={(e) => setTagFilter(e.target.value)}
-              style={{ marginRight: "8px" }}
             >
               <option value="">All tags</option>
               <option value="painting">Painting</option>
@@ -278,13 +414,14 @@ function App() {
               <option value="sketch">Sketch</option>
             </select>
             <input
+              className="text-input"
               type="number"
               value={maxPrice}
               placeholder="Max price"
               onChange={(e) => setMaxPrice(e.target.value)}
-              style={{ marginRight: "8px" }}
             />
             <select
+              className="select-input"
               value={sortOption}
               onChange={(e) => setSortOption(e.target.value)}
             >
@@ -296,17 +433,54 @@ function App() {
             </select>
           </div>
 
-          {sortedArtworks.map((art) => (
-            <div key={art._id} style={{ marginBottom: "20px" }}>
-              <h3>{art.title}</h3>
-              {art.imageURL && (
-                         <img src={getImageUrl(art.imageURL)} width="200" alt={art.title} />
-              )}
-              <div>
-                <button onClick={() => deleteArtwork(art._id)}>Delete</button>
-              </div>
-            </div>
-          ))}
+          <div className="artwork-grid">
+            {sortedArtworks.map((art) => (
+              <article key={art._id} className="art-card">
+                {art.imageURL && (
+                  <img
+                    className="art-image"
+                    src={getImageUrl(art.imageURL)}
+                    alt={art.title}
+                  />
+                )}
+                <div className="art-card-content">
+                  <h3>{art.title}</h3>
+                  <p className="status-text">Status: {art.auctionStatus || "pending"}</p>
+                  {art.biddingStart && <p>Starts: {new Date(art.biddingStart).toLocaleString()}</p>}
+                  {art.biddingEnd && <p>Ends: {new Date(art.biddingEnd).toLocaleString()}</p>}
+                  <p>
+                    Current bid: {art.highestBid?.amount > 0 ? art.highestBid.amount : art.startingPrice || 0}
+                    {art.highestBid?.bidderName ? ` by ${art.highestBid.bidderName}` : ""}
+                  </p>
+                  <div className="card-actions">
+                    <button className="secondary-button" onClick={() => deleteArtwork(art._id)}>
+                      Delete
+                    </button>
+                    {art.auctionStatus === "pending" && art.ownerId !== user?._id && (
+                      <button className="secondary-button" onClick={() => subscribeToArtwork(art._id)}>
+                        Subscribe
+                      </button>
+                    )}
+                  </div>
+                  {art.auctionStatus === "active" && art.ownerId !== user?._id && (
+                    <div className="bid-section">
+                      <input
+                        className="text-input"
+                        type="number"
+                        min="0"
+                        value={bidAmounts[art._id] || ""}
+                        placeholder="Your bid"
+                        onChange={(e) => handleBidInputChange(art._id, e.target.value)}
+                      />
+                      <button className="primary-button" onClick={() => placeBid(art._id)}>
+                        Place Bid
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
         </section>
       )}
     </div>
