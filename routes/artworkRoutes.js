@@ -29,6 +29,7 @@ const toPlainArtwork = (artwork) => ({
 router.post("/", upload.single("image"), async (req, res) => {
   const artworkData = {
     title: req.body.title,
+    ownerId: req.user?.id,
   };
 
   if (req.file) {
@@ -73,6 +74,14 @@ router.get("/:id", async (req, res) => {
 // UPDATE
 router.put("/:id", async (req, res) => {
   if (isDatabaseConnected()) {
+    const existingArtwork = await Artwork.findById(req.params.id);
+    if (!existingArtwork) {
+      return res.status(404).json({ error: "Artwork not found" });
+    }
+    if (existingArtwork.ownerId !== req.user?.id) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
     const artwork = await Artwork.findByIdAndUpdate(
       req.params.id,
       req.body,
@@ -86,6 +95,10 @@ router.put("/:id", async (req, res) => {
     return res.json(null);
   }
 
+  if (memoryArtworks[index].ownerId !== req.user?.id) {
+    return res.status(403).json({ error: "Not allowed" });
+  }
+
   memoryArtworks[index] = {
     ...memoryArtworks[index],
     ...req.body,
@@ -96,8 +109,24 @@ router.put("/:id", async (req, res) => {
 // DELETE
 router.delete("/:id", async (req, res) => {
   if (isDatabaseConnected()) {
+    const existingArtwork = await Artwork.findById(req.params.id);
+    if (!existingArtwork) {
+      return res.status(404).json({ error: "Artwork not found" });
+    }
+    if (existingArtwork.ownerId !== req.user?.id) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
     await Artwork.findByIdAndDelete(req.params.id);
     return res.json({ message: "Deleted" });
+  }
+
+  const artwork = memoryArtworks.find((item) => item._id === req.params.id);
+  if (!artwork) {
+    return res.json({ message: "Deleted" });
+  }
+  if (artwork.ownerId !== req.user?.id) {
+    return res.status(403).json({ error: "Not allowed" });
   }
 
   memoryArtworks = memoryArtworks.filter((item) => item._id !== req.params.id);
